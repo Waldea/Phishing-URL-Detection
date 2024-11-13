@@ -469,16 +469,15 @@
 
 #Example usage
 
-test_urls = [
-    "example.com",
-    "https:///example.com",
-    "http://example.com//path",
-    "  www.example.com  ",
-    "https://www.example.com////",
-    "example.com/path/to/resource",
-    "google.com",
-    "facebook.com"
-]
+#test_urls = [
+    #"example.com",
+    #"https:///example.com",
+    #"http://example.com//path",
+    #"  www.example.com  ",
+    #"https://www.example.com////",
+    #"example.com/path/to/resource",
+    #"google.com",
+    #"facebook.com"]
 
 # Run the main function to test and create DataFrame
 #feature_list = []

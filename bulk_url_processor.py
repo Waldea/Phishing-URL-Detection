@@ -710,4 +710,89 @@ class URLFeatureExtractor:
         self.validate_features(features)     
         await self.close_session()
         return features
+'''
+Example Usage:
+import pandas as pd
+import asyncio
+import aiohttp
+import nest_asyncio
 
+# Apply nest_asyncio to allow for re-entrance in the event loop in Jupyter/Colab
+nest_asyncio.apply()
+
+# Async function to extract features concurrently with batch handling
+async def extract_features_in_batches(urls, ref_urls, batch_size=500, max_concurrent_requests=300, max_retries=0, request_timeout=10):
+    extracted_features = []
+
+    # Create a shared session for all requests to avoid creating a new session each time
+    async with aiohttp.ClientSession() as session:
+        for i in range(0, len(urls), batch_size):
+            # Get the current batch of URLs
+            batch_urls = urls[i:i + batch_size]
+
+            # Semaphore to limit concurrency for this batch
+            semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+            # Create tasks for the current batch
+            tasks = []
+            for url in batch_urls:
+                extractor = URLFeatureExtractor(
+                    url=url,
+                    ref_urls_csv=ref_urls,
+                    session=session,
+                    perform_live_check=True,
+                    max_concurrent_requests=max_concurrent_requests,
+                    max_retries=max_retries,
+                    request_timeout=request_timeout
+                )
+                task = extract_features_for_url(extractor, semaphore)
+                tasks.append(task)
+
+            # Gather all tasks in the current batch
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Process results for the current batch
+            for features in results:
+                if isinstance(features, Exception):
+                    print(f"Error during feature extraction: {features}")
+                else:
+                    extracted_features.append(features)
+
+    # Convert the list of feature dictionaries into a DataFrame
+    features_df = pd.DataFrame(extracted_features)
+    return features_df
+
+# Helper function to extract features for a single URL using the semaphore
+async def extract_features_for_url(extractor, semaphore):
+    # Semaphore to limit the number of concurrent requests
+    async with semaphore:
+        try:
+            # Extract features using the asynchronous method
+            features = await extractor.extract_all_features()
+        except Exception as e:
+            print(f"Error extracting features for {extractor.url}: {e}")
+            features = None
+        return features
+
+# Example to run the async feature extraction
+if __name__ == "__main__":
+    # Assuming `data_sample` is your DataFrame with URLs
+    urls = data_sample['url'].tolist()  # List of URLs
+    ref_urls = ref_urls  # Replace with the actual list or path to CSV containing reference URLs
+
+    # Run the async feature extraction using asyncio.run() for compatibility
+    features_df = asyncio.run(
+        extract_features_in_batches(
+            urls=urls,
+            ref_urls=ref_urls,
+            batch_size=1000,  # Number of URLs to process in each batch
+            max_concurrent_requests=300,  # Max number of concurrent requests
+            max_retries=1,  # Max retries for failed requests
+            request_timeout=10  # Timeout for requests
+        )
+    )
+
+    # Save to CSV or perform any other operations
+    features_df.to_csv('extracted_features.csv', index=False)
+    features_df.head()
+'''

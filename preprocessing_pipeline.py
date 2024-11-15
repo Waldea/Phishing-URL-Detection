@@ -236,19 +236,19 @@ fig.tight_layout()
 plt.show()
 
 
-Making predictions
-
-#Example usage of deployment with a dataset called label_df
+# Example usage of deployment with a dataset called label_df
 print("\nDeployment Example with label_df:\n")
 deployment_model = MLModelPipeline(model=RandomForestClassifier())
 deployment_model.load_pipeline("/content/Random Forest_deployment.joblib")  # Load the trained pipeline
 
 # Predicting using the deployment pipeline
-predictions = deployment_model.predict(labeled_df)
-print(f"Predictions: {predictions}")
+predictions = deployment_model.predict(label_df)
+# Map the predictions to 'benign' and 'malignant'
+predictions_mapped = ['benign' if pred == 0 else 'malignant' for pred in predictions]
+print(f"Predictions: {predictions_mapped}")
 
 # If probabilistic predictions are required
-if hasattr(deployment_model.best_pipeline.named_steps['classifier'], 'predict'):
-    prob_predictions = deployment_model.predict(labeled_df)
+if hasattr(deployment_model.best_pipeline.named_steps['classifier'], 'predict_proba'):
+    prob_predictions = deployment_model.predict_proba(label_df)
     print(f"Probabilistic Predictions: {prob_predictions}")
 '''

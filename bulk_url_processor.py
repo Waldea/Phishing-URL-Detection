@@ -141,6 +141,8 @@ class URLFeatureExtractor:
             "free",
             "gift",
             "password"]
+        
+        self.suspicious_keywords = ["confirm", "secure", "login", "bank", "account", "password"]
 
     async def close_session(self):
         if self.own_session and self.session:
@@ -423,8 +425,10 @@ class URLFeatureExtractor:
         return 1 if self.parsed_url.scheme == 'https' else 0
 
     def get_num_subdomains(self):
-        return len(self.parsed_url.netloc.split('.')) - \
-            2 if len(self.parsed_url.netloc.split('.')) > 2 else 0
+        components = self.parsed_url.netloc.split('.')
+        # Remove 'www' from components if it exists
+        components = [comp for comp in components if comp.lower() != 'www']
+        return len(components) - 2 if len(components) > 2 else 0
 
     def get_num_subdirectories(self):
         return len([p for p in self.parsed_url.path.split('/') if p]
@@ -447,7 +451,7 @@ class URLFeatureExtractor:
 
     def char_repetition(self):
         char_counts = Counter(self.url)
-        return sum(1 for count in char_counts.values()
+        return sum(count for count in char_counts.values()
                    if count >= self.char_repetition_threshold)
 
     def shortened_url(self):
@@ -482,21 +486,13 @@ class URLFeatureExtractor:
         entropy = self.get_domain_entropy()
         return entropy > 3.5
 
-    def path_suspicious_keywords(self):
-        suspicious_keywords = [
-            "confirm",
-            "secure",
-            "login",
-            "bank",
-            "account",
-            "password"]
+    def path_suspicious_keywords(self): 
         path = self.parsed_url.path.lower()
-        return sum(1 for keyword in suspicious_keywords if keyword in path)
+        return sum(path.count(keyword) for keyword in self.suspicious_keywords)
 
     def query_suspicious_keywords(self):
-        suspicious_keywords = ["user", "token", "auth", "login", "id"]
         query = self.parsed_url.query.lower()
-        return sum(1 for keyword in suspicious_keywords if keyword in query)
+        return sum(query.count(keyword) for keyword in self.suspicious_keywords)
 
     def title_is_random(self):
         title = self.get_title()

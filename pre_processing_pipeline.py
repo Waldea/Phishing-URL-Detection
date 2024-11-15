@@ -6,6 +6,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from category_encoders import TargetEncoder
+from typing import List
 
 class PreprocessingPipeline:
     def __init__(self, n_components=0.95):

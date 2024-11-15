@@ -17,6 +17,7 @@ from scipy.spatial.distance import cosine
 from datetime import datetime, timezone
 import concurrent.futures
 from typing import List
+import ssl
 
 
 
@@ -44,6 +45,7 @@ class URLFeatureExtractor:
             request_timeout=10):
 
         self.url = self.normalize_url(url)
+        self.normalized_url = self.url
         self.parsed_url = urlparse(self.url)
         self.live_check_timeout = live_check_timeout
         self.char_repetition_threshold = char_repetition_threshold
@@ -54,6 +56,7 @@ class URLFeatureExtractor:
         self.well_known_domains = well_known_domains if well_known_domains else []
         self.ref_urls = ref_urls_csv if ref_urls_csv else []
         self.session = session
+        self.own_session = session is None
         self.max_concurrent_requests = max_concurrent_requests
         self.batch_size = batch_size
         self.max_retries = max_retries
@@ -147,9 +150,9 @@ class URLFeatureExtractor:
         url = url.strip()
         if not re.match(r'^(http|https)://', url):
             if url.startswith('www.'):
-                url = 'http://' + url
+                url = 'https://' + url
             else:
-                url = 'http://' + url
+                url = 'https://' + url
         if re.match(r'^(http|https):/{1,3}', url):
             url = re.sub(r'^(http|https):/{1,}', r'\1://', url)
         parsed_url = urlparse(url)
@@ -164,7 +167,26 @@ class URLFeatureExtractor:
                 '/') and len(urlparse(normalized_url).path) > 1:
             normalized_url = normalized_url[:-1]
         return normalized_url
-
+    
+    
+    async def determine_best_scheme(self):
+        schemes = ['https://', 'http://']
+        for scheme in schemes:
+            full_url = f"{scheme}{self.parsed_url.netloc}{self.parsed_url.path}"
+            try:
+                async with self.session.get(full_url, timeout=self.live_check_timeout) as response:
+                    if response.status == 200:
+                        # Update the normalized URL if scheme is determined successfully
+                        self.url = full_url
+                        self.parsed_url = urlparse(self.url)
+                        return full_url
+            except Exception as e:
+                # Ignore errors to continue with the next scheme
+                continue
+        # If none worked, keep the original normalized URL
+        return self.normalized_url
+    
+    
     # Network-Based Features
     async def fetch_multiple_pages(self, urls):
         """
@@ -192,10 +214,11 @@ class URLFeatureExtractor:
                 # Process results here if needed
                 for url, content in zip(batch_urls, results):
                     if isinstance(content, Exception):
-                        print(f"Failed to fetch {url} due to {content}")
+                        print(f"Failed to fetch {url} due to {content[:50]}")
                     else:
-                        print(f"Content fetched from {url}: {content[:100]}...")  # Print first 100 chars
+                        print(f"Content fetched from {url}: {content[:50]}...")  # Print first 100 chars
 
+    
 
     async def fetch_with_retries(self, url, session, max_retries, timeout, semaphore):
         retries = 0
@@ -216,6 +239,7 @@ class URLFeatureExtractor:
 
 
     async def fetch_page_content(self):
+        await self.determine_best_scheme()
         if not self.session:
             raise ValueError("Session not set. Please set a shared session.")
 
@@ -241,7 +265,7 @@ class URLFeatureExtractor:
                 else:
                     self.page_content = None
                     print(f"Non-200 status code received: {response.status}")
-        except (aiohttp.ClientConnectorError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientConnectorError, aiohttp.ClientError, asyncio.TimeoutError, ssl.SSLError) as e:
             print(f"Error fetching page content for {self.url}: {e}")
             self.page_content = None
 
@@ -304,13 +328,14 @@ class URLFeatureExtractor:
                 creation_date = creation_date[0]
             if creation_date:
                 if creation_date.tzinfo is None:
-                  creation_date = creation_date.replace(tzinfo=timezone.utc)
+                    creation_date = creation_date.replace(tzinfo=timezone.utc)
                 current_date = datetime.now(timezone.utc)  # Make timezone-aware
                 return (current_date - creation_date).days if creation_date else None
             return None
         except Exception as e:
             print(f"WHOIS error for domain age: {e}")
             return None
+        
     async def get_domain_age(self):
         loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -602,6 +627,8 @@ class URLFeatureExtractor:
             return "Less Likely"
         else:
             return "Unlikely"
+        
+    
 
     async def is_expired(self):
         days_to_expiry = await self.get_days_to_expiry()
@@ -616,6 +643,11 @@ class URLFeatureExtractor:
         if domain_age is not None and days_to_expiry is not None:
             return domain_age + days_to_expiry
         return None
+    
+    def validate_features(self, features):
+        missing_features = [key for key, value in features.items() if value is None]
+        if missing_features:
+            print(f"Warning: Missing features: {missing_features}")
 
 
 
@@ -625,7 +657,9 @@ class URLFeatureExtractor:
         print(f"Extracting features for: {self.url}")
         # Fetch the page content asynchronously before using content-based
         # features
+        await self.determine_best_scheme()
         await self.fetch_page_content()
+        
 
         features = {
            'url': self.url,
@@ -676,91 +710,8 @@ class URLFeatureExtractor:
         if self.perform_live_check:
             features['is_website_live'] = await self.is_website_live()
             features['has_redirect'] = await self.has_redirect()
-
-        return features
-'''
-# Example Usage
-import pandas as pd
-import asyncio
-import aiohttp
-import nest_asyncio
-
-# Apply nest_asyncio to allow for re-entrance in the event loop in Jupyter/Colab
-nest_asyncio.apply()
-
-# Async function to extract features concurrently with batch handling
-async def extract_features_in_batches(urls, ref_urls, batch_size=500, max_concurrent_requests=300, max_retries=0, request_timeout=10):
-    extracted_features = []
-
-    # Create a shared session for all requests to avoid creating a new session each time
-    async with aiohttp.ClientSession() as session:
-        for i in range(0, len(urls), batch_size):
-            # Get the current batch of URLs
-            batch_urls = urls[i:i + batch_size]
-
-            # Semaphore to limit concurrency for this batch
-            semaphore = asyncio.Semaphore(max_concurrent_requests)
-
-            # Create tasks for the current batch
-            tasks = []
-            for url in batch_urls:
-                extractor = URLFeatureExtractor(
-                    url=url,
-                    ref_urls_csv=ref_urls,
-                    session=session,
-                    perform_live_check=True,
-                    max_concurrent_requests=max_concurrent_requests,
-                    max_retries=max_retries,
-                    request_timeout=request_timeout
-                )
-                task = extract_features_for_url(extractor, semaphore)
-                tasks.append(task)
-
-            # Gather all tasks in the current batch
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Process results for the current batch
-            for features in results:
-                if isinstance(features, Exception):
-                    print(f"Error during feature extraction: {features}")
-                else:
-                    extracted_features.append(features)
-
-    # Convert the list of feature dictionaries into a DataFrame
-    features_df = pd.DataFrame(extracted_features)
-    return features_df
-
-# Helper function to extract features for a single URL using the semaphore
-async def extract_features_for_url(extractor, semaphore):
-    # Semaphore to limit the number of concurrent requests
-    async with semaphore:
-        try:
-            # Extract features using the asynchronous method
-            features = await extractor.extract_all_features()
-        except Exception as e:
-            print(f"Error extracting features for {extractor.url}: {e}")
-            features = None
+           
+        self.validate_features(features)     
+        await self.close_session()
         return features
 
-# Example to run the async feature extraction
-if __name__ == "__main__":
-    # Assuming `data_sample` is your DataFrame with URLs
-    urls = data_sample['url'].tolist()  # List of URLs
-    ref_urls = ref_urls  # Replace with the actual list or path to CSV containing reference URLs
-
-    # Run the async feature extraction using asyncio.run() for compatibility
-    features_df = asyncio.run(
-        extract_features_in_batches(
-            urls=urls,
-            ref_urls=ref_urls,
-            batch_size=1000,  # Number of URLs to process in each batch
-            max_concurrent_requests=300,  # Max number of concurrent requests
-            max_retries=0,  # Max retries for failed requests
-            request_timeout=10  # Timeout for requests
-        )
-    )
-
-    # Save to CSV or perform any other operations
-    features_df.to_csv('extracted_features.csv', index=False)
-    features_df.head()
-    '''
